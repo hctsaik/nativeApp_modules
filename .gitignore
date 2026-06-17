@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# venvs
+.venv/
+.venv-*/
+.tool-venvs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# derived data / weights (re-download / rebuild on first use; never source)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.pth
+*.pt
+*.onnx
+*.safetensors

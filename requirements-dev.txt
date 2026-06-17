@@ -1,0 +1,7 @@
+# 開發/測試用相依（lint / pytest）。
+# 模組「執行期」相依走各自 plugin.yaml 的 requires:（平台框架建隔離 per-tool venv 安裝），
+# 不在此檔；見平台 docs/platform/per-tool-dependencies.md。
+pytest>=7.0
+numpy
+opencv-python
+pillow
