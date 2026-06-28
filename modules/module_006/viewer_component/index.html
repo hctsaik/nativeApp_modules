@@ -1,0 +1,446 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  html, body { margin:0; padding:0; font-family: system-ui, sans-serif; }
+  #wrap { position: relative; }
+  #hud { position:absolute; top:0; left:0; right:0; z-index:5; font:12px monospace;
+         color:#0f0; background:rgba(0,0,0,.6); padding:3px 6px; pointer-events:none;
+         white-space:pre-line; line-height:1.45; }
+  /* #1 禁原生選圖/拖曳:不影響 OSD 平移與 Shift-ROI */
+  /* M7a:tabindex 使 #osd 可程式化 focus()(為 M7b 鍵盤鋪路;本片 focus 不影響行為) */
+  #osd { width:100%; height:720px; background:#111; outline:none;
+         user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none;
+         -webkit-user-drag:none; }
+  /* canvas 設 pointer-events:auto 讓 hover 取樣可命中(OSD 預設 none;事件仍冒泡到 #osd 供 OSD/本元件 handler) */
+  #osd canvas { user-select:none; -webkit-user-select:none; -webkit-user-drag:none;
+                pointer-events:auto; }
+  #rubber { position:absolute; border:2px dashed #ff0; background:rgba(255,255,0,.12);
+            display:none; z-index:4; pointer-events:none; }
+  .roi-ov { border:2px solid #0f0; box-sizing:border-box; }
+  .roi-lbl { position:absolute; top:-16px; left:0; font:11px monospace; color:#0f0;
+             background:rgba(0,0,0,.6); padding:0 3px; white-space:nowrap; }
+  /* 偵測框(向量 overlay):類別色邊框 + cls·conf 文字標籤(清晰、不隨縮放糊化;User 回饋 B)*/
+  .det-ov { box-sizing:border-box; pointer-events:none; }
+  .det-lbl { position:absolute; top:-15px; left:-2px; font:11px monospace; color:#fff;
+             padding:0 4px; white-space:nowrap; border-radius:3px 3px 0 0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/openseadragon.min.js"></script>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">載入中…</div>
+  <!-- M7a:tabindex=0 → 可程式化 focus()(為 M7b 鍵盤鋪路) -->
+  <div id="osd" tabindex="0"></div>
+  <div id="rubber"></div>
+</div>
+<script>
+// ---- Streamlit 元件協定(手寫,無 build)----
+function post(m){ window.parent.postMessage(Object.assign({isStreamlitMessage:true}, m), "*"); }
+function setH(h){ post({type:"streamlit:setFrameHeight", height:h}); }
+function setVal(v){ post({type:"streamlit:setComponentValue", value:v, dataType:"json"}); }
+
+// ★ M7a 固定 key 證據探針(沿用 spike kbd_component):
+//   (a) 本 iframe __loadCount:固定 key 同一 iframe 跨 rerun 不重跑 → 恆 ==1;
+//       idx-key remount → 每切張新 window → 舊 frame handle 失效。
+//   (b) window.top.__iframeBirths:每個 iframe 出生 +1(跨 frame 強探針,供 AC2 鑑別 remount)。
+window.__loadCount = (window.__loadCount || 0) + 1;
+try {
+  const top = window.top;
+  top.__iframeBirths = (top.__iframeBirths || 0) + 1;
+} catch(_){ /* 跨域讀不到 top;同域可讀 */ }
+
+const hud = document.getElementById('hud');
+const osdEl = document.getElementById('osd');
+const rubber = document.getElementById('rubber');
+let viewer=null, lastImage=null, lastRois="[]", lastDets="[]", evtN=0, H=720;
+let maxZoomPixelRatio=24.0;
+let autoHeight=false;
+let navKeys=false;   // ★ M7b:nav_keys=True 才啟用 document keydown 熱鍵
+
+// ★ M7a zoom/pan 跨切張保存(純 client 端):固定 key 下 OSD 物件存活,
+//   image-swap(非首次)前自存當下 viewport,新影像 open 後還原(不需 Python round-trip)。
+// 用 viewport bounds 矩形(x,y,w,h)一次封裝 pan+zoom,經 fitBounds 還原 —— 比 zoomTo+panTo
+// 分開還原穩定(後者經 applyConstraints 會因 center 落點與 visibilityRatio 互動而漂移)。
+let pendingRestore=false, restoreZoom=null, restoreCenter=null, restoreBounds=null;
+function curViewportState(){
+  try {
+    if (!viewer || !viewer.isOpen()) return {zoom:null, center:null, bounds:null};
+    // ★ M7a:抓『目標』viewport(getZoom/getBounds 不帶 true = 動畫終點),而非當前動畫中途值。
+    //   這樣即使切張保存發生在『前一次還原動畫尚未停』時,存到的也是它要去的穩定終點,
+    //   連續 next→prev 才不會把動畫中途的半路值(可能還停在 fit)誤存(AC3 間歇性失敗根因)。
+    const z = viewer.viewport.getZoom(false);
+    const c = viewer.viewport.getCenter(false);
+    const r = viewer.viewport.getBounds(false);
+    return { zoom: z, center: [c.x, c.y], bounds: [r.x, r.y, r.width, r.height] };
+  } catch(_){ return {zoom:null, center:null, bounds:null}; }
+}
+
+// #4 HUD 用的 meta / dets(過濾後);由 render handler 帶入
+let curMeta=null, curDets=[];
+
+// #3 client 端零 round-trip 取樣狀態(單圖模式)
+let sctx=null, sampleW=0, sampleH=0, sampleReady=false;
+// hover 即時狀態(供 HUD 多列組裝)
+let hoverX=null, hoverY=null, hoverRGB=null, hoverInside=false, hoverHit=null;
+let tiledMode=false;
+
+function imgPtFromEvent(e){
+  const r = osdEl.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  const vp = viewer.viewport.pointFromPixel(new OpenSeadragon.Point(px, py), true);
+  const ip = viewer.viewport.viewportToImageCoordinates(vp);
+  return { x: Math.round(ip.x), y: Math.round(ip.y), px, py };
+}
+
+function drawRois(rois){
+  if (!viewer) return;
+  viewer.clearOverlays();
+  (rois||[]).forEach(r => {
+    const b = r.bbox || r;
+    const rect = viewer.viewport.imageToViewportRectangle(
+      new OpenSeadragon.Rect(b[0], b[1], b[2], b[3]));
+    const el = document.createElement('div'); el.className = 'roi-ov';
+    if (r.label){ const t=document.createElement('div'); t.className='roi-lbl'; t.textContent=r.label; el.appendChild(t); }
+    viewer.addOverlay({ element: el, location: rect });
+  });
+  // 偵測框:類別色向量框 + cls·conf 文字標籤(與縮圖同色;User 回饋 B:大圖顯示類型/信心、顏色一致)
+  (curDets||[]).forEach(d => {
+    const b = d.bbox; if (!b) return;
+    const rect = viewer.viewport.imageToViewportRectangle(
+      new OpenSeadragon.Rect(b[0], b[1], b[2], b[3]));
+    const col = (d.color && d.color.length === 3)
+      ? ('rgb(' + d.color[0] + ',' + d.color[1] + ',' + d.color[2] + ')') : '#ff3b30';
+    const el = document.createElement('div'); el.className = 'det-ov';
+    el.style.border = '2px solid ' + col;
+    const t = document.createElement('div'); t.className = 'det-lbl'; t.style.background = col;
+    t.textContent = (d.cls || '') + (typeof d.conf === 'number' ? ' ' + d.conf.toFixed(2) : '');
+    el.appendChild(t);
+    viewer.addOverlay({ element: el, location: rect });
+  });
+}
+
+// #2 zoom%:用 getZoom(true) 換算成隨縮放單調變化的整數%(100%=fit;封頂後不再增長)
+function zoomPercent(){
+  if (!viewer || !viewer.isOpen()) return null;
+  try {
+    const z = viewer.viewport.getZoom(true);           // 1.0 = 影像鋪滿視口寬(fit)
+    if (!isFinite(z) || z <= 0) return null;
+    return Math.round(z * 100);
+  } catch(_){ return null; }
+}
+
+// #4 游標下框命中:x∈[bx,bx+bw) & y∈[by,by+bh);命中多框取面積最小者
+function hitDetAt(x, y){
+  let best=null, bestArea=Infinity;
+  for (const d of (curDets||[])){
+    const b = d.bbox; if (!b) continue;
+    const bx=b[0], by=b[1], bw=b[2], bh=b[3];
+    if (x >= bx && x < bx+bw && y >= by && y < by+bh){
+      const area = Math.max(1,bw) * Math.max(1,bh);
+      if (area <= bestArea){ bestArea = area; best = d; }
+    }
+  }
+  return best;
+}
+
+// #4 組裝多列 HUD
+function renderHud(){
+  if (!viewer || !viewer.isOpen()){ hud.textContent = '載入中…'; return; }
+  const lines = [];
+
+  // 第1列:name · idx1/total(來自 meta)
+  if (curMeta && (curMeta.name || curMeta.idx1)){
+    let l1 = '';
+    if (curMeta.name) l1 += curMeta.name;
+    if (curMeta.idx1 && curMeta.total){ l1 += (l1 ? ' · ' : '') + curMeta.idx1 + '/' + curMeta.total; }
+    if (l1) lines.push(l1);
+  }
+
+  // 第2列:W×H · {bit}-bit · {RGB|Gray} · {zoom}%
+  const zp = zoomPercent();
+  if (curMeta && curMeta.w && curMeta.h){
+    let l2 = curMeta.w + '×' + curMeta.h;
+    if (curMeta.bit) l2 += ' · ' + curMeta.bit + '-bit';
+    if (curMeta.channels) l2 += ' · ' + (curMeta.channels === 3 ? 'RGB' : 'Gray');
+    if (zp !== null) l2 += ' · ' + zp + '%';
+    lines.push(l2);
+  } else if (zp !== null){
+    lines.push(zp + '%');
+  }
+
+  // 第3列:hover (x,y) RGB
+  if (hoverX !== null && hoverY !== null){
+    let l3 = '(x=' + hoverX + ', y=' + hoverY + ')';
+    if (hoverInside && hoverRGB){
+      l3 += '  RGB=(' + hoverRGB[0] + ', ' + hoverRGB[1] + ', ' + hoverRGB[2] + ')';
+      // 16-bit 語義(AC9):hover=顯示值、點擊=真值
+      if (curMeta && curMeta.bit && curMeta.bit > 8){
+        l3 += ' (顯示值;點擊取真值)';
+      }
+    } else if (tiledMode){
+      l3 += '  RGB:瓦片模式不可用,點擊取真值';
+    }
+    lines.push(l3);
+  }
+
+  // 第4列:游標落在某框內 → cls conf
+  if (hoverHit){
+    lines.push('▸ ' + (hoverHit.cls || '') + ' ' + (typeof hoverHit.conf === 'number' ? hoverHit.conf.toFixed(2) : ''));
+  }
+
+  if (lines.length === 0){
+    lines.push('滾輪縮放 · 拖曳平移 · Shift+拖=框 ROI · 點擊取座標');
+  }
+  hud.textContent = lines.join('\n');
+}
+
+function buildViewer(tileSources, rois){
+  if (viewer){ viewer.destroy(); viewer=null; }
+  viewer = OpenSeadragon({
+    element: osdEl,
+    prefixUrl: "https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/images/",
+    tileSources: tileSources,
+    showNavigator: true,
+    maxZoomPixelRatio: (maxZoomPixelRatio || 24),
+    // ★ M7a:縮短縮放動畫(預設 1.2s),使 getZoom(true)『當前值』快速收斂到目標 —— 讓切張保存
+    //   抓到的是穩定 zoom(而非動畫中途值),AC3 跨切張還原才一致。仍保留輕量平滑感。
+    animationTime: 0.3,
+    gestureSettingsMouse: { scrollToZoom:true, clickToZoom:false },
+  });
+  // E2E 依賴:viewer frame 內 OSD 物件以全域 window.viewer 暴露
+  window.viewer = viewer;
+  viewer.addHandler('open', () => {
+    // ★ M7a 命題4:新影像 open 預設 fit;若有 restore(image-swap 前自存)→ 立即還原 viewport
+    //   (immediately=true 不留殘影;maxZoomPixelRatio=24 確保不被 clamp 回 fit)。
+    //   優先用 fitBounds(矩形封裝 pan+zoom,穩定不漂移);無 bounds 才退回 zoomTo+panTo。
+    if (pendingRestore){
+      try {
+        if (restoreBounds){
+          viewer.viewport.fitBounds(new OpenSeadragon.Rect(
+            restoreBounds[0], restoreBounds[1], restoreBounds[2], restoreBounds[3]), true);
+        } else if (restoreZoom != null){
+          viewer.viewport.zoomTo(restoreZoom, null, true);
+          if (restoreCenter){
+            viewer.viewport.panTo(new OpenSeadragon.Point(restoreCenter[0], restoreCenter[1]), true);
+          }
+          viewer.viewport.applyConstraints(true);
+        }
+      } catch(_){}
+    }
+    pendingRestore=false;
+    renderHud(); drawRois(rois);
+    // OSD 預設給 canvas inline pointer-events:none(事件交由容器 div 處理);
+    // 改為 auto 讓 hover 取樣命中 canvas,事件仍冒泡到 #osd 供 OSD/本元件 handler(平移/ROI 不受影響)。
+    osdEl.querySelectorAll('canvas').forEach(c => { c.style.pointerEvents = 'auto'; });
+    // ★ M7a:open 後主動把焦點抓回 viewer(為 M7b 鍵盤鋪路;本片有焦點不影響既有行為)。
+    try { osdEl.focus(); } catch(_){}
+  });
+  viewer.addHandler('animation-finish', () => drawRois(JSON.parse(lastRois)));
+  // zoom% 隨縮放即時更新
+  viewer.addHandler('zoom', () => renderHud());
+  viewer.addHandler('animation', () => renderHud());
+  viewer.addHandler('resize', () => renderHud());
+
+  // #3 hover 即時 x,y + RGB(client-side,不 round-trip)
+  osdEl.addEventListener('mousemove', (e) => {
+    if (!viewer || !viewer.isOpen() || drawing) return;
+    const p = imgPtFromEvent(e);
+    hoverX = p.x; hoverY = p.y;
+    const inBounds = sampleReady && p.x >= 0 && p.x < sampleW && p.y >= 0 && p.y < sampleH;
+    hoverInside = inBounds;
+    if (inBounds){
+      try {
+        const d = sctx.getImageData(p.x, p.y, 1, 1).data;
+        hoverRGB = [d[0], d[1], d[2]];
+      } catch(_){ hoverRGB = null; hoverInside = false; }
+    } else {
+      hoverRGB = null;
+    }
+    hoverHit = hitDetAt(p.x, p.y);
+    renderHud();
+  });
+
+  // #1 禁原生選圖/拖曳:OSD 平移與 Shift-ROI 不受影響
+  osdEl.addEventListener('dragstart', (e) => e.preventDefault());
+  osdEl.addEventListener('selectstart', (e) => e.preventDefault());
+
+  // 點擊取座標(非 Shift、非拖框)— 既有 canvas-click 行為保留不變
+  viewer.addHandler('canvas-click', (ev) => {
+    if (ev.originalEvent && ev.originalEvent.shiftKey) return;
+    const vp = viewer.viewport.pointFromPixel(ev.position);
+    const ip = viewer.viewport.viewportToImageCoordinates(vp);
+    setVal({ type:'click', x:Math.round(ip.x), y:Math.round(ip.y),
+             zoom:Number(viewer.viewport.getZoom(true).toFixed(4)), n:++evtN });
+  });
+
+  // Shift+拖 → 畫 ROI rubber-band
+  osdEl.addEventListener('mousedown', (e) => {
+    if (!e.shiftKey) return;
+    drawing=true; viewer.setMouseNavEnabled(false);
+    const r=osdEl.getBoundingClientRect(); start={x:e.clientX-r.left, y:e.clientY-r.top};
+    rubber.style.display='block';
+    rubber.style.left=start.x+'px'; rubber.style.top=start.y+'px'; rubber.style.width='0'; rubber.style.height='0';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drawing) return;
+    const r=osdEl.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top;
+    rubber.style.left=Math.min(start.x,x)+'px'; rubber.style.top=Math.min(start.y,y)+'px';
+    rubber.style.width=Math.abs(x-start.x)+'px'; rubber.style.height=Math.abs(y-start.y)+'px';
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (!drawing) return;
+    drawing=false; viewer.setMouseNavEnabled(true); rubber.style.display='none';
+    const r=osdEl.getBoundingClientRect();
+    const a=viewer.viewport.viewportToImageCoordinates(viewer.viewport.pointFromPixel(new OpenSeadragon.Point(start.x, start.y), true));
+    const b=viewer.viewport.viewportToImageCoordinates(viewer.viewport.pointFromPixel(new OpenSeadragon.Point(e.clientX-r.left, e.clientY-r.top), true));
+    const x=Math.round(Math.min(a.x,b.x)), y=Math.round(Math.min(a.y,b.y));
+    const w=Math.round(Math.abs(a.x-b.x)), h=Math.round(Math.abs(a.y-b.y));
+    if (w>2 && h>2) setVal({ type:'roi', bbox:[x,y,w,h], n:++evtN });
+  });
+}
+// Shift-ROI 共用狀態(buildViewer 內外都用到)
+let drawing=false, start=null;
+
+// #3 把單圖 data URL 畫到 offscreen canvas(原始像素尺寸)供零 round-trip 取樣
+function prepSample(imageUrl){
+  sampleReady=false; sctx=null; sampleW=0; sampleH=0;
+  const im = new Image();
+  im.onload = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = im.naturalWidth; c.height = im.naturalHeight;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(im, 0, 0);
+      sctx = ctx; sampleW = im.naturalWidth; sampleH = im.naturalHeight;
+      sampleReady = true;
+    } catch(_){ sampleReady=false; sctx=null; }
+  };
+  im.onerror = () => { sampleReady=false; sctx=null; };
+  im.src = imageUrl;
+}
+
+function initViewer(imageUrl, rois){
+  tiledMode=false;
+  prepSample(imageUrl);            // #3 單圖:準備取樣
+  buildViewer({ type:'image', url: imageUrl }, rois);
+}
+function initTiledViewer(T, rois){
+  // #3 瓦片降級:無單一全圖 → sampleReady=false,hover 只顯示 x,y+zoom、不顯示 RGB
+  tiledMode=true; sampleReady=false; sctx=null;
+  // OSD 自訂 tile source:level 編號與 DZI 一致(0=最小、max_level=原尺寸),
+  // 只在 getTileUrl 被呼叫時回該瓦片 data url(可視區外不取)。
+  buildViewer({
+    width: T.width, height: T.height,
+    tileSize: T.tile_size, tileOverlap: T.overlap,
+    minLevel: 0, maxLevel: T.max_level,
+    getTileUrl: function(level, x, y){
+      const lv = T.tiles[level] || T.tiles[String(level)];
+      return lv ? lv[x + "_" + y] : null;
+    }
+  }, rois);
+}
+
+// ★ M7a auto_height:量 window.innerHeight 動態給高(viewer 最大化,設計 §1.1 / M7a-AC7),
+//   height 當下限。回傳 frame 高與 #osd 高同步(讓 viewer 明顯大於 M6 固定 600)。
+function computeHeight(minH){
+  if (!autoHeight) return minH;
+  let vh = 0;
+  try { vh = Math.round((window.innerHeight || 0) * 0.92); } catch(_){ vh = 0; }
+  return Math.max(minH || 0, vh || 0, 720);
+}
+// ★ M7a:只在高度『真的改變』時才設(避免每次 rerun 都 setFrameHeight 觸發 OSD resize→re-fit,
+//   那會在切張保存路徑外把 zoom/pan 漂移掉,是 AC3 的根因之一)。
+let lastAppliedH = -1;
+function applyHeight(minH){
+  const h = computeHeight(minH);
+  if (h === lastAppliedH) return h;   // 沒變 → 不動 DOM、不 setH(不擾動 viewport)
+  lastAppliedH = h;
+  osdEl.style.height = h + 'px';
+  setH(h + 40);
+  return h;
+}
+
+let lastTiles = null;
+window.addEventListener('message', (e) => {
+  const d=e.data; if (!d || d.type!=='streamlit:render') return;
+  const args=d.args||{};
+  // ★ M7a 命題4:在任何 height/resize 變更『之前』先抓當下 viewport(切張保存的真值);
+  //   即使 preserveImageSizeOnResize=true,也先抓最保險,避免 setFrameHeight 的 reflow 影響取樣。
+  const preVs = curViewportState();
+  autoHeight = !!args.auto_height;
+  navKeys = !!args.nav_keys;     // ★ M7b:由 app 端 nav_keys 開關控制鍵盤工作流
+  H = args.height || 600; applyHeight(H);
+  // #4 接 meta / dets(過濾後);變動時更新 HUD
+  curMeta = args.meta || null;
+  curDets = args.dets || [];
+  const detsJson = JSON.stringify(curDets);   // 偵測框內容簽名:變動才重畫 overlay(B)
+  // ★ M7a:restore_zoom/center 由 args 帶回(M7b 鍵盤 nav 用);M7a 切張保存以 client 端自存為主
+  if (args.restore_zoom != null) restoreZoom = args.restore_zoom;
+  if (args.restore_center != null) restoreCenter = args.restore_center;
+  const roisJson = JSON.stringify(args.rois || []);
+  const tiles = args.tiles || null;
+  if (args.max_zoom_pixel_ratio) maxZoomPixelRatio = args.max_zoom_pixel_ratio;
+  const tilesSig = tiles ? (tiles.width+"x"+tiles.height+"@"+tiles.max_level) : null;
+  if (tiles && tilesSig !== lastTiles){
+    lastTiles=tilesSig; lastImage=null; lastRois=roisJson; lastDets=detsJson;
+    pendingRestore=false; initTiledViewer(tiles, args.rois||[]);
+  } else if (args.image && args.image !== lastImage){
+    // ★ M7a 命題4:image-swap(非首次)前自存當下 viewport(用 render 前抓的 preVs),open 後還原。
+    const firstLoad = (lastImage === null);
+    if (!firstLoad && preVs.zoom != null){
+      restoreZoom = preVs.zoom; restoreCenter = preVs.center; restoreBounds = preVs.bounds;
+      pendingRestore = true;
+    } else if (args.restore_zoom != null){
+      restoreBounds = null;    // app 經 args 帶了 zoom/center(M7b)→ 用 zoomTo+panTo 還原
+      pendingRestore = true;
+    } else {
+      pendingRestore = false;
+    }
+    lastImage=args.image; lastTiles=null; lastRois=roisJson; lastDets=detsJson;
+    initViewer(args.image, args.rois||[]);
+  } else if (roisJson !== lastRois || detsJson !== lastDets){
+    // 同圖下 ROI 或偵測框(conf 過濾後)變動 → 重畫 overlay(含類別色框+標籤;B)
+    lastRois=roisJson; lastDets=detsJson; drawRois(args.rois||[]);
+  }
+  // meta/dets 可能在同圖下更新 → 重畫 HUD
+  renderHud();
+});
+// ★ M7b 鍵盤工作流(nav_keys=True 才啟用):document keydown(capture)→ nav 事件(setComponentValue)。
+//   - capture:true + stopPropagation:本元件先吃掉熱鍵,OSD 自身的方向鍵平移/縮放不被誤觸。
+//   - 焦點守衛:焦點在(本 iframe 內的)INPUT/TEXTAREA/contentEditable → 放行不攔(設計 §3.3、§3.4)。
+//     主文件的 number_input/text_area 在另一份 document,鍵天然不傳進本 iframe(§6 界線;AC9)。
+//   - 鍵位(設計 §3.4):←/→=prev/next、[ ]=同義 prev/next、1/2/3=verdict、r=status 循環、b=bookmark、u=undo。
+//   - nav 事件帶當下 zoom/center(設計 §2.1b);實際跨切張 zoom/pan 保存由 M7a client 端 image-swap 自存負責。
+document.addEventListener('keydown', function(e){
+  if (!navKeys) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  let action = null, value = null;
+  switch (e.key) {
+    case 'ArrowRight': action = 'next'; break;
+    case 'ArrowLeft':  action = 'prev'; break;
+    case ']':          action = 'next'; break;
+    case '[':          action = 'prev'; break;
+    case '1': action = 'verdict'; value = 'true_defect'; break;
+    case '2': action = 'verdict'; value = 'false_alarm'; break;
+    case '3': action = 'verdict'; value = 'reflection'; break;
+    case 'r': case 'R': action = 'status'; break;
+    case 'b': case 'B': action = 'bookmark'; break;
+    case ' ': case 'Spacebar': action = 'bookmark'; break;   // User:空白鍵也能 bookmark(同 b)
+    case 'u': case 'U': action = 'undo'; break;
+    default: return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const vs = curViewportState();
+  setVal({ type:'nav', action:action, value:value, n:++evtN,
+           zoom: vs.zoom, center: vs.center });
+}, true);
+
+post({type:"streamlit:componentReady", apiVersion:1}); setH(760);
+</script>
+</body>
+</html>

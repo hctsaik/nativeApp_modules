@@ -1,0 +1,19 @@
+id: module_006
+slug: yolo-detection-viewer
+vendor: cimcore
+domain: detection
+name: YOLO 偵測檢視
+version: "2.0.0"
+category: module
+description: 選『主要 / 對比』兩個資料夾即整批檢視 YOLO 偵測結果（移植自獨立 app CV_Viewer）。Output 頁=完整 viewer：縮圖牆、OpenSeadragon 縮放畫布（滾輪縮放/平移/點擊取像素值）、上一張/下一張導覽、信心門檻、類別下拉、🔀 雙 model 覆蓋比對（IoU 框級配對 + 覆蓋率儀表板）。
+author: system
+enabled: true
+tags:
+  - yolo
+  - detection
+  - viewer
+  - overlay
+  - compare
+  - folder
+runner: cv_framework
+aliases: []
