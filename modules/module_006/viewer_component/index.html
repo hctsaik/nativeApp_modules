@@ -347,6 +347,17 @@ function initTiledViewer(T, rois){
 //   height 當下限。回傳 frame 高與 #osd 高同步(讓 viewer 明顯大於 M6 固定 600)。
 function computeHeight(minH){
   if (!autoHeight) return minH;
+  // 在 split-tool 內,本 iframe 起點在上方命令列/標題之下(parent 內 top≈200+);
+  // 必須只用『自身上緣到 parent 視窗底』的剩餘高度,否則用整窗高會超出畫面(垂直捲動)。
+  // Streamlit component 與主程式同源 → 可讀 window.parent 與 frameElement 位置;
+  // 失敗(跨源)才退回舊行為。setH() 會再 +40,故這裡先扣 48(40 + 8px 底部留白)。
+  let avail = 0;
+  try {
+    const fe = window.frameElement;
+    const ph = (window.parent && window.parent.innerHeight) || 0;
+    if (fe && ph) avail = Math.round(ph - Math.max(0, fe.getBoundingClientRect().top) - 48);
+  } catch(_){ avail = 0; }
+  if (avail > 200) return Math.max(240, avail);
   let vh = 0;
   try { vh = Math.round((window.innerHeight || 0) * 0.92); } catch(_){ vh = 0; }
   return Math.max(minH || 0, vh || 0, 720);

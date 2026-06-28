@@ -309,11 +309,16 @@ def render(folder, model_b_override=""):
         "/* User 回饋:標題上方一大塊空白 = 主內容容器預設上 padding(新版 Streamlit 用 .block-container/"
         "   stMainBlockContainer,舊選擇器 section.main 不一定命中)→ 用 class + testid 雙保險收到接近 0 */"
         ".block-container,[data-testid='stMainBlockContainer'],section.main div.block-container"
-        "{padding-top:0.4rem !important;padding-bottom:0.5rem !important;}"
+        "{padding-top:0.4rem !important;padding-bottom:0.5rem !important;"
+        "padding-left:0.6rem !important;padding-right:0.6rem !important;max-width:100% !important;}"
         "/* 隱藏只放 <style> 的空 markdown 容器(本身佔一行高,造成標題上方留白)*/"
         "[data-testid='stMarkdownContainer']:has(> style){display:none !important;}"
         "/* 標題上緣不再額外留白 */"
         ".block-container > div:first-child{margin-top:0 !important;}"
+        "/* viewer-first:隱藏 cv_framework_runner 注入的『執行結果』大標題(框架 chrome,"
+        "   與 viewer 自身標題重複),把垂直空間讓給畫布。cvviewer 自己不用 st.title/header"
+        "   /subheader,故 stHeading 僅此一個,隱藏安全。*/"
+        "[data-testid='stHeading'],[data-testid='stHeadingContainer']{display:none !important;}"
         "</style>",
         unsafe_allow_html=True,
     )

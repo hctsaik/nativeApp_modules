@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <style>
-  html, body { margin:0; padding:0; font-family: system-ui, sans-serif; background:transparent; }
-  #wall { display:flex; flex-direction:column; gap:8px; padding:2px; }
+  html, body { margin:0; padding:0; height:100%; font-family: system-ui, sans-serif; background:transparent; }
+  /* 縱向縮圖牆:填滿 iframe 高、縮圖多時內部自捲(不撐高整頁) */
+  #wall { display:flex; flex-direction:column; gap:8px; padding:2px;
+          height:100%; box-sizing:border-box; overflow-y:auto; overflow-x:hidden; }
   /* 橫向模式(比較區塊縮圖條):一列、原生水平捲軸、不換行;每格固定寬 → 可快速捲到任一張 */
   #wall.horiz { flex-direction:row; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
                 gap:6px; padding:2px 2px 8px; }
@@ -37,6 +39,21 @@ function setVal(v){ post({type:"streamlit:setComponentValue", value:v, dataType:
 const wall = document.getElementById('wall');
 let evtN = 0;
 let lastSig = null;
+
+// RWD:縮圖牆高度貼合『自身上緣到 parent 視窗底』的可用高(同 viewer_component),
+// 而非固定 620 —— 否則在較矮螢幕會超出畫面造成整頁垂直捲動。內容多時 iframe 內部自捲。
+// 跨源讀不到 parent 時退回傳入 height。
+function fitH(fallback){
+  try {
+    const fe = window.frameElement;
+    const ph = (window.parent && window.parent.innerHeight) || 0;
+    if (fe && ph){
+      const a = Math.round(ph - Math.max(0, fe.getBoundingClientRect().top) - 12);
+      if (a > 160) return a;
+    }
+  } catch(_){}
+  return Math.max(120, fallback || 620);
+}
 
 function render(items, selected, height, horizontal){
   wall.className = horizontal ? 'horiz' : '';
@@ -83,8 +100,8 @@ function render(items, selected, height, horizontal){
     wall.appendChild(cell);
   });
 
-  // setFrameHeight:用傳入 height(讓 Streamlit 容器夠高顯示整牆)
-  setH(Math.max(120, height || 620));
+  // setFrameHeight:橫向縮圖條用傳入 height;縱向縮圖牆貼合可用視窗高(內容多時內部自捲)。
+  setH(horizontal ? Math.max(120, height || 150) : fitH(height));
 }
 
 window.addEventListener('message', (e) => {
@@ -101,7 +118,7 @@ window.addEventListener('message', (e) => {
     lastSig = sig;
     render(items, selected, height, horizontal);
   } else {
-    setH(Math.max(120, height));
+    setH(horizontal ? Math.max(120, height || 150) : fitH(height));
   }
 });
 post({type:"streamlit:componentReady", apiVersion:1}); setH(620);
