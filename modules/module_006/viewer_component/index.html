@@ -61,6 +61,23 @@ let viewer=null, lastImage=null, lastRois="[]", lastDets="[]", evtN=0, H=720;
 let maxZoomPixelRatio=24.0;
 let autoHeight=false;
 let navKeys=false;   // ★ M7b:nav_keys=True 才啟用 document keydown 熱鍵
+// 顯示模式(User 需求):'fill'=Resize → 等比縮放讓整張圖碰到畫布邊(contain;小圖放大;
+//   例 800×200 影像 / 1600×500 畫布 → 1600×400,= OSD goHome);'actual'=原始大小 1:1。預設 fill。
+let fitMode='fill';
+// 使用者是否手動縮放/平移過『當前這張圖』;true 時 resize 不自動 refit(不搶使用者縮放)。
+// 每換一張新圖會重置為 false → 新圖一律重新 fit(這就是「每張都滿版」的關鍵)。
+let userZoomed=false;
+function applyFitNow(immediately){
+  if (!viewer || !viewer.isOpen()) return;
+  try {
+    if (fitMode === 'actual'){
+      viewer.viewport.zoomTo(viewer.viewport.imageToViewportZoom(1.0), null, !!immediately);  // 1:1
+    } else {
+      viewer.viewport.goHome(!!immediately);   // contain:整張可見、碰到畫布邊
+    }
+    viewer.viewport.applyConstraints(!!immediately);
+  } catch(_){}
+}
 
 // ★ M7a zoom/pan 跨切張保存(純 client 端):固定 key 下 OSD 物件存活,
 //   image-swap(非首次)前自存當下 viewport,新影像 open 後還原(不需 Python round-trip)。
@@ -231,6 +248,9 @@ function buildViewer(tileSources, rois){
           viewer.viewport.applyConstraints(true);
         }
       } catch(_){}
+    } else {
+      // 新圖(非還原):依顯示模式 fit(Resize=goHome 整張碰邊 / 原始大小=1:1)。
+      applyFitNow(true);
     }
     pendingRestore=false;
     renderHud(); drawRois(rois);
@@ -244,7 +264,12 @@ function buildViewer(tileSources, rois){
   // zoom% 隨縮放即時更新
   viewer.addHandler('zoom', () => renderHud());
   viewer.addHandler('animation', () => renderHud());
-  viewer.addHandler('resize', () => renderHud());
+  // 畫布尺寸改變(例如 auto_height 撐高後)→ 若使用者還沒手動縮放,重新 fit 讓圖跟著填滿
+  //（這修掉「auto_height 撐高後 OSD 不重 fit、圖沒滿版」)。
+  viewer.addHandler('resize', () => { renderHud(); if (!userZoomed) applyFitNow(true); });
+  // 使用者手動縮放/捏放 → 標記後 resize 不再自動 refit(尊重使用者當前縮放)。
+  viewer.addHandler('canvas-scroll', () => { userZoomed = true; });
+  viewer.addHandler('canvas-pinch', () => { userZoomed = true; });
 
   // #3 hover 即時 x,y + RGB(client-side,不 round-trip)
   osdEl.addEventListener('mousemove', (e) => {
@@ -386,6 +411,11 @@ window.addEventListener('message', (e) => {
   const preVs = curViewportState();
   autoHeight = !!args.auto_height;
   navKeys = !!args.nav_keys;     // ★ M7b:由 app 端 nav_keys 開關控制鍵盤工作流
+  // 顯示模式(fill=Resize / actual=原始大小);切換時立即重新 fit。
+  if (args.fit_mode){
+    const nm = (args.fit_mode === 'actual') ? 'actual' : 'fill';
+    if (nm !== fitMode){ fitMode = nm; userZoomed = false; applyFitNow(true); }
+  }
   H = args.height || 600; applyHeight(H);
   // #4 接 meta / dets(過濾後);變動時更新 HUD
   curMeta = args.meta || null;
@@ -402,17 +432,10 @@ window.addEventListener('message', (e) => {
     lastTiles=tilesSig; lastImage=null; lastRois=roisJson; lastDets=detsJson;
     pendingRestore=false; initTiledViewer(tiles, args.rois||[]);
   } else if (args.image && args.image !== lastImage){
-    // ★ M7a 命題4:image-swap(非首次)前自存當下 viewport(用 render 前抓的 preVs),open 後還原。
-    const firstLoad = (lastImage === null);
-    if (!firstLoad && preVs.zoom != null){
-      restoreZoom = preVs.zoom; restoreCenter = preVs.center; restoreBounds = preVs.bounds;
-      pendingRestore = true;
-    } else if (args.restore_zoom != null){
-      restoreBounds = null;    // app 經 args 帶了 zoom/center(M7b)→ 用 zoomTo+panTo 還原
-      pendingRestore = true;
-    } else {
-      pendingRestore = false;
-    }
+    // User 需求:每換一張新圖都重新 fit(依顯示模式),不沿用上一張縮放
+    // (移除原 M7a『跨切張自動保留縮放』——那會讓新圖沿用上一張的小縮放、看起來沒滿版)。
+    pendingRestore = false;
+    userZoomed = false;
     lastImage=args.image; lastTiles=null; lastRois=roisJson; lastDets=detsJson;
     initViewer(args.image, args.rois||[]);
   } else if (roisJson !== lastRois || detsJson !== lastDets){

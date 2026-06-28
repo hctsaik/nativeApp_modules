@@ -20,7 +20,8 @@ def osd_viewer(image_url: str = None, rois=None, tiles=None, height: int = 600,
                key: str = "cv_viewer",
                meta: dict = None, dets=None, max_zoom_pixel_ratio: float = 24.0,
                restore_zoom: float = None, restore_center=None,
-               nav_keys: bool = False, auto_height: bool = False):
+               nav_keys: bool = False, auto_height: bool = False,
+               fit_mode: str = "fill"):
     """image_url 與 tiles 二擇一:tiles 非 None 時走金字塔瓦片模式(大圖)。
     tiles = {"width","height","tile_size","overlap","max_level",
              "tiles": {level(int): {"col_row": <data url>}}}。
@@ -47,4 +48,5 @@ def osd_viewer(image_url: str = None, rois=None, tiles=None, height: int = 600,
                       max_zoom_pixel_ratio=max_zoom_pixel_ratio,
                       restore_zoom=restore_zoom, restore_center=restore_center,
                       nav_keys=bool(nav_keys), auto_height=bool(auto_height),
+                      fit_mode=(fit_mode or "fill"),
                       default=None)

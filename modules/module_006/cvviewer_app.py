@@ -603,7 +603,7 @@ def render(folder, model_b_override=""):
     # (筆電 768 高最明顯,見 multi-agent RWD 評估)。因此把『標題/使用手冊/比較模式 toggle』
     # 全部併進這一列命令列,省下原本各佔一列的 ~2 列高(~90px)還給畫布。
     # 欄序:上一張 / 下一張 / 跳頁 / ☆ / 信心門檻 slider / Object 類別 / 🔀比較 / ❓手冊。
-    bar = st.columns([0.85, 0.85, 0.5, 0.4, 2.4, 1.2, 1.15, 0.7], vertical_alignment="center")
+    bar = st.columns([0.8, 0.8, 0.5, 0.4, 2.0, 1.1, 1.05, 1.0, 0.55], vertical_alignment="center")
     if bar[0].button("⟵ 上一張", width=_STRETCH):
         ss.idx = max(0, ss.idx - 1)
         st.rerun()
@@ -631,10 +631,15 @@ def render(folder, model_b_override=""):
         ss["cls_filter"] = "全部"
     _cls_sel = bar[5].selectbox("Object 類別", ["全部"] + _all_classes, key="cls_filter")
     overlay_classes = None if _cls_sel == "全部" else [_cls_sel]
+    # 顯示模式(User 需求):Resize=等比縮放讓整張圖碰到畫布邊(整張可見、小圖會放大;預設);
+    # 原始=1:1 原始大小。切換即重新 fit(viewer_component 收 fit_mode)。
+    _disp = bar[6].selectbox("顯示", ["Resize", "原始"], key="m006_fit_mode",
+                             help="Resize:等比縮放填滿畫布(整張可見);原始:1:1 原始大小")
+    _fit_mode = "actual" if _disp == "原始" else "fill"
     # 🔀 比較模式 toggle:併進命令列(原本獨立一列);key 不變,stage 仍讀 ss['compare_on']。
-    bar[6].toggle("🔀 比較", key="compare_on", help="雙 model 覆蓋比對(填了對比資料夾才有作用)")
+    bar[7].toggle("🔀 比較", key="compare_on", help="雙 model 覆蓋比對(填了對比資料夾才有作用)")
     # ❓ 使用手冊:併進命令列尾欄(原本與標題同列);開 modal dialog。
-    if bar[7].button("❓", type="tertiary", key="manual_btn", help="使用手冊"):
+    if bar[8].button("❓", type="tertiary", key="manual_btn", help="使用手冊"):
         _show_manual()
     # kept(過濾後偵測):偵測框恆顯示,由信心門檻 + Object 類別過濾;主 viewer dets 與 P1 探針 data-shown-k 共用。
     kept = overlay.filter_detections(cur["detections"], conf_threshold=conf_thr,
@@ -831,7 +836,8 @@ def render(folder, model_b_override=""):
             ev = osd_viewer(url, rois=rois_draw, height=720, key="cv_viewer",
                             meta={"name": cur["name"], "idx1": ss.idx + 1, "total": total,
                                   "w": w, "h": h, "bit": bit, "channels": ch},
-                            dets=dets_draw, auto_height=True, nav_keys=True)
+                            dets=dets_draw, auto_height=True, nav_keys=True,
+                            fit_mode=_fit_mode)
             if isinstance(ev, dict) and ev.get("n", 0) > ss.get("last_n", 0):
                 ss.last_n = ev["n"]
                 if ev.get("type") == "click":
