@@ -378,7 +378,10 @@ def render(folder, model_b_override=""):
             _pred_caption = "Model A 標註於同影像資料夾"
     if class_names:
         _pred_caption += f" · 類別名 {len(class_names)} 個已載入"
-    st.sidebar.caption(_pred_caption)
+    # 原 app 把這行狀態放 st.sidebar；模組版的資料夾選擇已移到 Input 頁，側邊欄不再有內容，
+    # 若仍用 st.sidebar.caption 會憑空生出一條約 300px 的空側邊欄、把整個 viewer 往右擠（左右不滿版）。
+    # 改成主流程 st.caption → 無側邊欄 → 主內容左右滿版。
+    st.caption(_pred_caption)
 
     # 比較模式第二個 model 的標註夾(須與 model A 對同一影像集);留空 = 不進行雙 model 比對。
     model_b_folder = model_b_override.strip() or None
