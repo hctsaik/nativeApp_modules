@@ -319,6 +319,9 @@ def render(folder, model_b_override=""):
         "   與 viewer 自身標題重複),把垂直空間讓給畫布。cvviewer 自己不用 st.title/header"
         "   /subheader,故 stHeading 僅此一個,隱藏安全。*/"
         "[data-testid='stHeading'],[data-testid='stHeadingContainer']{display:none !important;}"
+        "/* RWD:收緊各列垂直間距 + caption 邊距,讓頂部 chrome 更薄(空間讓給 OSD 畫布,尤其筆電 768 高) */"
+        "[data-testid='stVerticalBlock']{gap:0.4rem !important;}"
+        "[data-testid='stCaptionContainer'],[data-testid='stCaption']{margin-top:0 !important;margin-bottom:0 !important;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -592,17 +595,15 @@ def render(folder, model_b_override=""):
         st.markdown(_USER_MANUAL)
 
 
-    # 標題 + 緊鄰的小型『❓ 使用手冊』文字鈕(type='tertiary' = 無框、像一個小字,不撐滿欄寬;
-    # 標題欄取窄比例讓小字緊貼標題右側)。
-    _tcol = st.columns([0.26, 0.74], gap="small", vertical_alignment="center")
-    _tcol[0].markdown("##### 🖼️ YOLO Image Viewer")
-    if _tcol[1].button("❓ 使用手冊", type="tertiary", key="manual_btn"):
-        _show_manual()
     # Object 下拉可選類別 = 全部 shown_items 偵測的 cls 聯集(穩定;跨切張不變)。
     _all_classes = sorted({d.get("cls", "") for it in shown_items
                            for d in it["detections"] if d.get("cls")})
-    # 信心門檻 slider 欄需夠寬(過窄會使鍵盤 ArrowRight 微調不可靠 — 見 ROADMAP 2026-06-26)→ 給 3.2。
-    bar = st.columns([0.8, 0.8, 0.45, 0.4, 3.2, 1.35], vertical_alignment="center")
+    # ── 單列命令列(viewer-first / RWD)─────────────────────────────────────────
+    # 移植自獨立 app 後在 portal 限高 iframe 內,固定頂部 chrome 越厚、OSD 畫布越被擠扁
+    # (筆電 768 高最明顯,見 multi-agent RWD 評估)。因此把『標題/使用手冊/比較模式 toggle』
+    # 全部併進這一列命令列,省下原本各佔一列的 ~2 列高(~90px)還給畫布。
+    # 欄序:上一張 / 下一張 / 跳頁 / ☆ / 信心門檻 slider / Object 類別 / 🔀比較 / ❓手冊。
+    bar = st.columns([0.85, 0.85, 0.5, 0.4, 2.4, 1.2, 1.15, 0.7], vertical_alignment="center")
     if bar[0].button("⟵ 上一張", width=_STRETCH):
         ss.idx = max(0, ss.idx - 1)
         st.rerun()
@@ -623,14 +624,18 @@ def render(folder, model_b_override=""):
                      help="Bookmark(熱鍵 b / 空白鍵)"):
         _push_change(cur["path"], ss.idx, "bookmarked", _bk_on, (not _bk_on))
         st.rerun()
-    # 信心門檻 slider(User:移除旁邊 [−][＋] 鈕,只留滑桿)。
+    # 信心門檻 slider(欄寬 2.4:夠寬讓鍵盤 ArrowRight 微調可靠,又不像舊 3.2 那樣霸佔半畫面)。
     bar[4].slider("信心門檻", 0.0, 1.0, conf_thr, 0.01, key="footer_conf_thr")
-    # Object 類別 下拉(User:放信心門檻旁;選『全部』或單一類別 → 只畫該類別框)。
-    # 跨資料集切換時,清掉已不在選項內的舊選值(widget 實例化前改 state 才合法)。
+    # Object 類別 下拉(選『全部』或單一類別 → 只畫該類別框)。跨資料集切換清掉舊選值(widget 前改 state 才合法)。
     if ss.get("cls_filter") not in (["全部"] + _all_classes):
         ss["cls_filter"] = "全部"
     _cls_sel = bar[5].selectbox("Object 類別", ["全部"] + _all_classes, key="cls_filter")
     overlay_classes = None if _cls_sel == "全部" else [_cls_sel]
+    # 🔀 比較模式 toggle:併進命令列(原本獨立一列);key 不變,stage 仍讀 ss['compare_on']。
+    bar[6].toggle("🔀 比較", key="compare_on", help="雙 model 覆蓋比對(填了對比資料夾才有作用)")
+    # ❓ 使用手冊:併進命令列尾欄(原本與標題同列);開 modal dialog。
+    if bar[7].button("❓", type="tertiary", key="manual_btn", help="使用手冊"):
+        _show_manual()
     # kept(過濾後偵測):偵測框恆顯示,由信心門檻 + Object 類別過濾;主 viewer dets 與 P1 探針 data-shown-k 共用。
     kept = overlay.filter_detections(cur["detections"], conf_threshold=conf_thr,
                                      classes=overlay_classes)
@@ -755,8 +760,7 @@ def render(folder, model_b_override=""):
             "delta_imgs": summary["delta_imgs"], "delta_boxes": summary["delta_boxes"]}
 
 
-    # 🔀 比較模式入口 toggle(在 stage 之前渲染 → ss.compare_on 在中欄渲染前已知)。標籤含『比較模式』供 E2E 命中。
-    st.toggle("🔀 比較模式（雙 model 覆蓋比對）", key="compare_on")
+    # 🔀 比較模式 toggle 已併入上方單列命令列(bar[6]);ss['compare_on'] 在 stage 渲染前已知。
 
 
     # ============================== Stage 兩欄:縮圖牆 | 主 viewer / 比較區塊 ==============================

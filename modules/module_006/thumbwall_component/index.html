@@ -16,8 +16,10 @@
           box-sizing:border-box; background:#1112; line-height:0; }
   .cell:hover { border-color:#4a90d9; }
   .cell.sel { border-color:#ffd000; }
+  /* 縱向縮圖牆:cap 縮圖高(直式圖不過高,矮螢幕仍可露 ≥3 張);橫向條維持 width:100% */
   .cell img { width:100%; height:auto; display:block; border-radius:2px;
               user-select:none; -webkit-user-drag:none; }
+  #wall:not(.horiz) .cell img { max-height:140px; width:auto; max-width:100%; margin:0 auto; }
   .corner { position:absolute; top:2px; left:2px; z-index:2;
             font:11px monospace; color:#fff; background:rgba(0,0,0,.65);
             padding:0 5px; border-radius:3px; line-height:1.5; }

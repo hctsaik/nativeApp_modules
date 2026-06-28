@@ -10,7 +10,7 @@
          white-space:pre-line; line-height:1.45; }
   /* #1 禁原生選圖/拖曳:不影響 OSD 平移與 Shift-ROI */
   /* M7a:tabindex 使 #osd 可程式化 focus()(為 M7b 鍵盤鋪路;本片 focus 不影響行為) */
-  #osd { width:100%; height:720px; background:#111; outline:none;
+  #osd { width:100%; height:720px; background:#1e1e1e; outline:none;
          user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none;
          -webkit-user-drag:none; }
   /* canvas 設 pointer-events:auto 讓 hover 取樣可命中(OSD 預設 none;事件仍冒泡到 #osd 供 OSD/本元件 handler) */
