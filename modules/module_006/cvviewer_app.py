@@ -456,6 +456,8 @@ def render(folder, model_b_override=""):
         shown_items = filtersort.sort_items(shown_items, smart, reverse=smart_rev)
     elif _sort_mode == "信心(高→低)":
         shown_items = filtersort.sort_items(shown_items, "conf", reverse=True)
+    elif _sort_mode == "信心(低→高)":
+        shown_items = filtersort.sort_items(shown_items, "conf", reverse=False)
     else:
         shown_items = filtersort.sort_items(shown_items, "name")
 
@@ -682,7 +684,7 @@ def render(folder, model_b_override=""):
         mode = c[0].selectbox("看哪種差異", [m[0] for m in _CMP_MODES],
                               format_func=lambda k: dict(_CMP_MODES)[k], key="cmp_mode")
         lo, hi = c[1].slider("信心範圍(下界–上界)", 0.0, 1.0, (0.0, 1.0), 0.01, key="cmp_conf")
-        c[3].selectbox("排序", ["檔名", "信心(高→低)"], key="sort_mode",
+        c[3].selectbox("排序", ["檔名", "信心(高→低)", "信心(低→高)"], key="sort_mode",
                        help="分歧佇列順序:by 檔名 或 by 信心(高→低)")
         all_cls = sorted({d.get("cls", "") for it in shown_items
                           for d in (it["detections"] + it.get("detections_b", [])) if d.get("cls")})
@@ -706,6 +708,9 @@ def render(folder, model_b_override=""):
         _filtered = modeldiff.filter_images(recs, mode)
         if _sort_mode == "信心(高→低)":
             triaged = sorted(_filtered, key=lambda r: -max(
+                (float(d.get("conf", 0.0)) for d in r["_it"]["detections"]), default=0.0))
+        elif _sort_mode == "信心(低→高)":
+            triaged = sorted(_filtered, key=lambda r: max(
                 (float(d.get("conf", 0.0)) for d in r["_it"]["detections"]), default=0.0))
         else:
             triaged = sorted(_filtered, key=lambda r: r["name"])
@@ -787,7 +792,7 @@ def render(folder, model_b_override=""):
             if not ss.thumb_collapsed:
                 # 排序(User:by 檔名 / by 信心高→低;單張與比較共用 sort_mode key,兩模式互斥不衝突)。
                 # (『縮圖牆』標題文字依 User 回饋移除。)
-                st.selectbox("排序", ["檔名", "信心(高→低)"], key="sort_mode",
+                st.selectbox("排序", ["檔名", "信心(高→低)", "信心(低→高)"], key="sort_mode",
                              help="縮圖牆與導覽順序:by 檔名 或 by 信心(高→低)")
                 import base64 as _b64
                 # ★ M7a §效能(PerfC 基礎 + 連改門檻不卡):縮圖牆的『燒框』只跟『顯示偵測框開關』走,
