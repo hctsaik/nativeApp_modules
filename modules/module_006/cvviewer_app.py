@@ -771,16 +771,10 @@ def render(folder, model_b_override=""):
     # ============================== Stage 兩欄:縮圖牆 | 主 viewer / 比較區塊 ==============================
     # 縮圖牆收合旗標控制欄寬(收成 0 寬把寬度讓回 viewer);旗標跨 rerun/跨圖持久(M7a-AC4)。
     # 比較模式:隱藏主縮圖牆(由 A/B 區塊各自的橫向縮圖條取代主導覽),整個 stage 讓給雙區塊(設計 23 §7)。
+    # User 決議：移除右側偵測面板，把整個寬度還給 OSD 畫布（影像更大）。回到兩欄：縮圖牆 | OSD 畫布。
     _compare = ss.get("compare_on", False)
-    if _compare:
-        # 比較模式:整個 stage 讓給中欄雙區塊(無縮圖牆、無右側偵測面板)。
-        left, center = st.columns([0.0001, 6.6])
-        right = None
-    else:
-        # 正常模式三欄:縮圖牆 | OSD 畫布 | 右側偵測面板。直式圖在寬畫布兩側本是幾何必然的大留邊,
-        # 把『各類別框數 + 偵測清單』放右側用掉那片空白 → 提升資訊密度(multi-agent RWD 決議:善用兩側)。
-        _left_w = 0.0001 if ss.thumb_collapsed else 0.85
-        left, center, right = st.columns([_left_w, 5.6, 1.5])
+    _left_w = 0.0001 if (ss.thumb_collapsed or _compare) else 0.85
+    left, center = st.columns([_left_w, 6.6])
 
     # -------- 左欄:縮圖牆(可收 0 寬;比較模式不渲染)--------
     with left:
@@ -860,28 +854,7 @@ def render(folder, model_b_override=""):
             if lc:
                 st.info(f"📍 ({lc['x']}, {lc['y']}) → 像素值 **{lc['val']}**　(zoom {lc['zoom']}×)")
 
-    # -------- 右欄:偵測面板(正常模式)——各類別框數 + 偵測清單,用掉直式圖兩側留白 --------
-    if right is not None:
-        with right:
-            st.caption(f"📦 偵測 {len(kept)} 框　信心 ≥ {conf_thr:.2f}")
-            _cc = {}
-            for d in kept:
-                _cc[d.get("cls", "")] = _cc.get(d.get("cls", ""), 0) + 1
-            for _c, _n in sorted(_cc.items(), key=lambda kv: (-kv[1], kv[0])):
-                _r, _g, _b = _cls_color(_c)
-                st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:6px;font-size:0.9rem;line-height:1.7'>"
-                    f"<span style='width:12px;height:12px;border-radius:2px;flex:0 0 auto;"
-                    f"background:rgb({_r},{_g},{_b})'></span><b>{_c or '(未命名)'}</b>　{_n}</div>",
-                    unsafe_allow_html=True)
-            if kept:
-                st.divider()
-                st.dataframe(
-                    {"類別": [d.get("cls", "") for d in kept],
-                     "信心": [round(float(d.get("conf", 0.0)), 2) for d in kept]},
-                    use_container_width=True, hide_index=True, height=300)
-            else:
-                st.caption("此信心門檻下沒有偵測框。")
+    # （右側偵測面板已依 User 要求移除，寬度全還給 OSD 畫布。偵測資訊仍以畫布上的類別色框 + HUD 呈現。）
 
     # ============================== 比較模式說明 ==============================
     # User 裁決:工具台其餘 tab(標記/相似/聚類/DZI/漏檢/匯出)移除,只留比較;比較改為頂部『🔀 比較模式』
